@@ -29,13 +29,12 @@ module.exports = function(BasePlugin){
             , 'upcycling'
             ]
         , fs = require('fs')
+        , _ = require('underscore')
         , request = require('request')
+        , jsdom = require('jsdom').jsdom
         , srcPath = docpad.config.srcPath
         , outPath = docpad.config.outPath
-        , tomd = require('to-markdown').toMarkdown
         , urijs = require('URIjs')
-        , wphost = 'http://localhost/'
-        , wpuri = urijs(wphost)
     ;
     function whichcats(data){
         var cats = []
@@ -47,65 +46,79 @@ module.exports = function(BasePlugin){
         })
         return cats
     }
-    function createDocument(directory, attachments, post, savepost){
-        var att
-            , imgdir = srcPath + '/documents' + directory + '/images'
+    function createDocument(postdir, post){
+        var imgdir = srcPath + '/documents' + postdir + '/images'
             , imgname
             , _i
-            , _len = attachments.length
+            , img
+            , docu = jsdom(post.content)
+            , imgs = docu.getElementsByTagName('img')
+            , _len = imgs.length
             ;
+
         if ( !fs.existsSync(imgdir) ) { fs.mkdirSync(imgdir) }
+
+        if ( post.thumbnail != null ) {
+            post.thumbnail = postdir + '/images/' + urijs(post.thumbnail).filename()
+        }
+
         for ( _i = 0; _i < _len; _i++ ) {
-            att = attachments[_i]
-            imgname = urijs(att.url).filename()
-            request(att.url).pipe(fs.createWriteStream(imgdir + '/' + imgname))
+            img = imgs[_i]
+            imgname = urijs(img.src).filename()
+            request(img.src).pipe(fs.createWriteStream(imgdir + '/' + imgname))
+
+            if ( _i == 0 && post.thumbnail == null ) {
+                post.thumbnail = postdir + '/images/' + imgname
+            }
+
             post.content = post.content.replace(
-                                new RegExp(att.url, 'g')
-                                , directory + '/images/' + imgname
+                                new RegExp(img.src, 'g')
+                                , postdir + '/images/' + imgname
                            )
         }
-        return savepost(directory, post)
+
+
+        savepost(postdir, post)
     }
 
     function savepost(dir, post){
-        var doc = '---\n'
+        var postcontent = post.content
             ;
-        doc += "layout: 'article'\n"
-        doc += "title: '" + post.title + "'\n"
-        doc += "date: '" + post.date + "'\n"
-        doc += "tags: '" + post.tags.map(function(o){return o.title}).join(', ') + "'\n"
-        doc += "author: '" + post.author.nickname + "'\n"
-        doc += '---\n\n'
-        doc += tomd(post.content) + '\n'
-        doc += '\n'
-        return fs.writeFile(srcPath + '/documents' + dir + '/index.html.md', doc, 'utf8', function(err){
-            if ( err ) { throw err }
-            return docpad.action('generate')
-        })
+        delete(post.content)
+
+        post = _.extend(post, {wpurl: post.url, url: null, layout : 'articles'})
+        docpad.createDocument(
+                {content:postcontent,fullPath:srcPath + '/documents' + dir + '/index.html'}
+                , {data:postcontent, meta: post}
+            ).writeSource(function(){docpad.action('generate')})
+
     }
 
     function newpost(req){
-        return request({ uri: wpuri.addSearch({
+        return request(
+                { uri: urijs(process.env.WPHOST).addSearch({
                                 'json': 'get_post'
                                 , 'dev': 1
                                 , 'id': req.body.ID
+                                , 'custom_fields': 'slide_description'
                             }).toString()
-                        }, function(err, response, body){
-            if ( err ) { throw err }
-            var category
-                , post = JSON.parse(body).post
-                , _i
-                , _ref = whichcats(post.categories)
-                , _len = _ref.length
-                , postdir
-                ;
-            for ( _i = 0; _i < _len; _i++ ) {
-                category = _ref[_i]
-                postdir = srcPath + '/documents/' + category + '/' + post.slug
-                if ( ! fs.existsSync(postdir) ) { fs.mkdirSync(postdir) }
-                createDocument('/' + category + '/' + post.slug, post.attachments, post, savepost)
-            }
-        })
+                }, function(err, response, body){
+                    if ( err ) { throw err }
+                    var category
+                        , post = JSON.parse(body).post
+                        , _i
+                        , _ref = whichcats(post.categories)
+                        , _len = _ref.length
+                        , postdir
+                        ;
+                    for ( _i = 0; _i < _len; _i++ ) {
+                        category = _ref[_i]
+                        postdir = srcPath + '/documents/' + category + '/' + post.slug
+                        if ( ! fs.existsSync(postdir) ) { fs.mkdirSync(postdir) }
+                        createDocument('/' + category + '/' + post.slug, post)
+                    }
+                }
+        )
     }
     return HooksPlugin = (function(_super) {
 
