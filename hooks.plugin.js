@@ -35,7 +35,44 @@ module.exports = function(BasePlugin){
         , srcPath = docpad.config.srcPath
         , outPath = docpad.config.outPath
         , urijs = require('URIjs')
+        , vow = require('promises')
     ;
+    function exists(path){
+        return function(){
+            var v = vow.make()
+                ;
+            fs.exists(path, function(exists){
+                if ( exists ) {
+                    v.keep(path)
+                console.log(path, true)
+                } else {
+                    v.break(path)
+                console.log(path, false)
+                }
+            })
+            return v.promise
+        }
+    }
+
+    function createdir(path){
+        var v = vow.make()
+            ;
+        console.log('createdir:', path);
+        fs.mkdir(
+            path
+            , function(err){
+                if ( err ) {
+                    v.break(err)
+            console.log(path, 'failed to create')
+                } else {
+                    v.keep(path)
+            console.log(path, 'created')
+                }
+            }
+        )
+        return v.promise
+    }
+
     function whichcats(data){
         var cats = []
             ;
@@ -46,52 +83,74 @@ module.exports = function(BasePlugin){
         })
         return cats
     }
-    function createDocument(postdir, post){
-        var imgdir = srcPath + '/documents' + postdir + '/images'
-            , imgname
-            , _i
-            , img
-            , docu = jsdom(post.content)
-            , imgs = docu.getElementsByTagName('img')
-            , _len = imgs.length
-            ;
 
-        if ( !fs.existsSync(imgdir) ) { fs.mkdirSync(imgdir) }
+    function handleImgs(post, imgs, imgdir, relativedir){
+        return function(){
+            var v = vow.make()
+                ;
+            imgs.forEach(
+                function(img, i){
+                    var imgname = urijs(img).filename()
+                        ;
+                    request(img).pipe(fs.createWriteStream(imgdir+'/'+imgname))
 
-        if ( post.thumbnail != null ) {
-            post.thumbnail = postdir + '/images/' + urijs(post.thumbnail).filename()
+                    if ( i == 0 && post.thumbnail == null ) {
+                        post.thumbnail = relativedir + imgname
+                    }
+
+                    post.content = post.content.replace(
+                                        new RegExp(img, 'g')
+                                        , relativedir + imgname
+                                   )
+                }
+            )
+            return v.promise
         }
-
-        for ( _i = 0; _i < _len; _i++ ) {
-            img = imgs[_i]
-            imgname = urijs(img.src).filename()
-            request(img.src).pipe(fs.createWriteStream(imgdir + '/' + imgname))
-
-            if ( _i == 0 && post.thumbnail == null ) {
-                post.thumbnail = postdir + '/images/' + imgname
-            }
-
-            post.content = post.content.replace(
-                                new RegExp(img.src, 'g')
-                                , postdir + '/images/' + imgname
-                           )
-        }
-
-
-        savepost(postdir, post)
     }
 
-    function savepost(dir, post){
-        var postcontent = post.content
+    function savepost(documentdir, post){
+        return function(){
+            var postcontent = post.content
+                ;
+            delete(post.content)
+
+            post = _.extend(post, {wpurl: post.url, url: null, layout : 'articles'})
+            docpad.createDocument(
+                    {content:postcontent,fullPath: documentdir + '/index.html'}
+                    , {data:postcontent, meta: post}
+                ).writeSource(function(){docpad.action('generate')})
+        }
+    }
+
+    function createDocument(category, post){
+
+        var  categorydir = srcPath + '/documents/' + category
+            , documentdir = srcPath + '/documents/' + category + '/' + post.slug
+            , filescatdir = srcPath + '/files/' + category
+            , postdir =  filescatdir + '/' + post.slug
+            , imgdir = postdir + '/images'
+            , relativedir = '/' + category + '/' + post.slug + '/images/'
+            , docu = jsdom(post.content)
+            , imgs = Array.prototype.slice.call(docu.getElementsByTagName('img'))
+                            .map(function(img){ return img.src})
+                            .concat(post.attachments.map(function(img){ return img.url}))
             ;
-        delete(post.content)
 
-        post = _.extend(post, {wpurl: post.url, url: null, layout : 'articles'})
-        docpad.createDocument(
-                {content:postcontent,fullPath:srcPath + '/documents' + dir + '/index.html'}
-                , {data:postcontent, meta: post}
-            ).writeSource(function(){docpad.action('generate')})
+        if ( post.thumbnail != null ) {
+            post.thumbnail = relativedir + urijs(post.thumbnail).filename()
+        }
 
+        exists(filescatdir)().when(null, createdir)
+            .when(exists(postdir)).when(null, createdir)
+            .when(exists(imgdir)).when(null, createdir)
+            .when(exists(categorydir)).when(null, createdir)
+            .when(exists(documentdir)).when(null, createdir)
+            .when(handleImgs(post, imgs, imgdir, relativedir))
+            .when(savepost(documentdir, post), failure)
+    }
+
+    function failure(){
+        console.err(arguments)
     }
 
     function newpost(req){
@@ -104,19 +163,13 @@ module.exports = function(BasePlugin){
                             }).toString()
                 }, function(err, response, body){
                     if ( err ) { throw err }
-                    var category
-                        , post = JSON.parse(body).post
-                        , _i
-                        , _ref = whichcats(post.categories)
-                        , _len = _ref.length
-                        , postdir
+                    var post = JSON.parse(body).post
                         ;
-                    for ( _i = 0; _i < _len; _i++ ) {
-                        category = _ref[_i]
-                        postdir = srcPath + '/documents/' + category + '/' + post.slug
-                        if ( ! fs.existsSync(postdir) ) { fs.mkdirSync(postdir) }
-                        createDocument('/' + category + '/' + post.slug, post)
-                    }
+                    whichcats(post.categories).forEach(
+                        function(category){
+                            createDocument( category, post)
+                        }
+                    )
                 }
         )
     }
