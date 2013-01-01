@@ -1,7 +1,7 @@
 {
   "name": "docpad-plugin-hooks",
   "version": "0.0.0",
-  "description": "DocPad plugin which adds the ability to receive hook requests from external services",
+  "description": "DocPad plugin bridge to WP admin post editor ",
   "homepage": "https://github.com/ashnur/docpad-plugin-hooks",
   "keywords": [
     "docpad",
