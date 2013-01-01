@@ -38,39 +38,34 @@ module.exports = function(BasePlugin){
         , vow = require('promises')
     ;
     function exists(path){
-        return function(){
-            var v = vow.make()
-                ;
-            fs.exists(path, function(exists){
-                if ( exists ) {
-                    v.keep(path)
-                console.log(path, true)
-                } else {
-                    v.break(path)
-                console.log(path, false)
-                }
-            })
-            return v.promise
-        }
+        var v = vow.make()
+            ;
+        fs.exists(path, function(exists){
+            if ( exists ) {
+                v.keep(path)
+            } else {
+                v.break(path)
+            }
+        })
+        return v.promise
     }
 
     function createdir(path){
-        var v = vow.make()
-            ;
-        console.log('createdir:', path);
-        fs.mkdir(
-            path
-            , function(err){
-                if ( err ) {
-                    v.break(err)
-            console.log(path, 'failed to create')
-                } else {
-                    v.keep(path)
-            console.log(path, 'created')
+        return function(){
+            var v = vow.make()
+                ;
+            fs.mkdir(
+                path
+                , function(err){
+                    if ( err ) {
+                        v.break(err)
+                    } else {
+                        v.keep(path)
+                    }
                 }
-            }
-        )
-        return v.promise
+            )
+            return v.promise
+        }
     }
 
     function whichcats(data){
@@ -88,22 +83,27 @@ module.exports = function(BasePlugin){
         return function(){
             var v = vow.make()
                 ;
-            imgs.forEach(
-                function(img, i){
-                    var imgname = urijs(img).filename()
-                        ;
-                    request(img).pipe(fs.createWriteStream(imgdir+'/'+imgname))
+            try {
+                imgs.forEach(
+                    function(img, i){
+                        var imgname = urijs(img).filename()
+                            ;
+                        request(img).pipe(fs.createWriteStream(imgdir+'/'+imgname))
 
-                    if ( i == 0 && post.thumbnail == null ) {
-                        post.thumbnail = relativedir + imgname
+                        if ( i == 0 && post.thumbnail == null ) {
+                            post.thumbnail = relativedir + imgname
+                        }
+
+                        post.content = post.content.replace(
+                                            new RegExp(img, 'g')
+                                            , relativedir + imgname
+                                       )
                     }
-
-                    post.content = post.content.replace(
-                                        new RegExp(img, 'g')
-                                        , relativedir + imgname
-                                   )
-                }
-            )
+                )
+                v.keep(post)
+            } catch ( e ) {
+                v.break(e)
+            }
             return v.promise
         }
     }
@@ -111,14 +111,21 @@ module.exports = function(BasePlugin){
     function savepost(documentdir, post){
         return function(){
             var postcontent = post.content
+                , v = vow.make()
                 ;
-            delete(post.content)
+            try {
+                delete(post.content)
 
-            post = _.extend(post, {wpurl: post.url, url: null, layout : 'articles'})
-            docpad.createDocument(
-                    {content:postcontent,fullPath: documentdir + '/index.html'}
-                    , {data:postcontent, meta: post}
-                ).writeSource(function(){docpad.action('generate')})
+                post = _.extend(post, {wpurl: post.url, url: null, layout : 'articles'})
+                docpad.createDocument(
+                        {content:postcontent,fullPath: documentdir + '/index.html'}
+                        , {data:postcontent, meta: post}
+                    ).writeSource(function(){docpad.action('generate')})
+                v.keep()
+            } catch ( e ) {
+                v.break(e)
+            }
+            return v.promise
         }
     }
 
@@ -140,11 +147,11 @@ module.exports = function(BasePlugin){
             post.thumbnail = relativedir + urijs(post.thumbnail).filename()
         }
 
-        exists(filescatdir)().when(null, createdir)
-            .when(exists(postdir)).when(null, createdir)
-            .when(exists(imgdir)).when(null, createdir)
-            .when(exists(categorydir)).when(null, createdir)
-            .when(exists(documentdir)).when(null, createdir)
+        exists(filescatdir).when(null, createdir(filescatdir))
+            .when(exists(postdir).when(null, createdir(postdir)))
+            .when(exists(imgdir).when(null, createdir(imgdir)))
+            .when(exists(categorydir).when(null, createdir(categorydir)))
+            .when(exists(documentdir).when(null, createdir(documentdir)))
             .when(handleImgs(post, imgs, imgdir, relativedir))
             .when(savepost(documentdir, post), failure)
     }
